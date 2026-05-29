@@ -82,6 +82,10 @@ export class Database<T extends any> {
    * @returns once its this items time to run in queue
    */
   private async addQueueTask(): Promise<void> {
+    // The queue is only drained once, right after the synchronous fetch in the
+    // constructor. If data is already loaded there is nothing to wait for, so
+    // resolve immediately instead of pushing a task that would never run.
+    if (this.MEMORY) return;
     return new Promise((resolve) => {
       this.QUEUE.push(resolve);
     });
@@ -93,12 +97,22 @@ export class Database<T extends any> {
    */
   private async saveData(): Promise<void> {
     if (!this.MEMORY) await this.addQueueTask();
-    const chunks = JSON.stringify(this.MEMORY).match(/.{1,8000}/g);
-    if (!chunks) return;
+    const chunks = JSON.stringify(this.MEMORY ?? {}).match(/.{1,8000}/g) ?? [
+      "{}",
+    ];
+
+    // Clear any stale chunks left over from a previously larger dataset,
+    // otherwise they linger in the world and waste storage.
+    const previousLength = world.getDynamicProperty(`db_${this.tableName}`);
+    if (typeof previousLength === "number") {
+      for (let i = chunks.length; i < previousLength; i++) {
+        world.setDynamicProperty(`db_${this.tableName}_${i}`, undefined);
+      }
+    }
+
     world.setDynamicProperty(`db_${this.tableName}`, chunks.length);
-    const entries = chunks.entries();
-    for (const [i, chunk] of entries) {
-      world.setDynamicProperty(`db_${this.tableName}_${i}`, chunk);
+    for (let i = 0; i < chunks.length; i++) {
+      world.setDynamicProperty(`db_${this.tableName}_${i}`, chunks[i]);
     }
   }
 
@@ -130,8 +144,8 @@ export class Database<T extends any> {
    */
   get(key: string): T | null {
     if (!this.MEMORY)
-      throw new Error("Data not loaded! Consider using `getAsync` instead!");
-    return this.MEMORY[key];
+      throw new Error("Data not loaded! Consider using `getSync` instead!");
+    return key in this.MEMORY ? this.MEMORY[key] : null;
   }
 
   /**
@@ -143,7 +157,7 @@ export class Database<T extends any> {
     if (this.MEMORY) return this.get(key);
     await this.addQueueTask();
     if (!this.MEMORY) return null;
-    return this.MEMORY[key];
+    return key in this.MEMORY ? this.MEMORY[key] : null;
   }
 
   /**
@@ -196,7 +210,7 @@ export class Database<T extends any> {
   has(key: string): boolean {
     if (!this.MEMORY)
       throw new Error("Data not loaded! Consider using `hasSync` instead!");
-    return Boolean(this.MEMORY[key]);
+    return key in this.MEMORY;
   }
 
   /**
@@ -208,7 +222,7 @@ export class Database<T extends any> {
     if (this.MEMORY) return this.has(key);
     await this.addQueueTask();
     if (!this.MEMORY) return false;
-    return Boolean(this.MEMORY[key]);
+    return key in this.MEMORY;
   }
 
   /**
@@ -241,9 +255,10 @@ export class Database<T extends any> {
    */
   async delete(key: string): Promise<boolean> {
     if (!this.MEMORY) return false;
-    const status = delete this.MEMORY[key];
+    const existed = key in this.MEMORY;
+    delete this.MEMORY[key];
     await this.saveData();
-    return status;
+    return existed;
   }
 
   /**

@@ -1,6 +1,13 @@
 import { Player, system } from "@minecraft/server";
 import { TABLES } from "./tables";
 
+// Subscribe once so the strain test can survive a watchdog terminate without
+// stacking a new listener every time it runs.
+system.beforeEvents.watchdogTerminate.subscribe((data) => {
+  data.cancel = true;
+  console.warn("[DATABASE]: Watchdog terminate cancelled during strain test.");
+});
+
 system.afterEvents.scriptEventReceive.subscribe(
   ({ sourceEntity, message, id }) => {
     if (!(sourceEntity instanceof Player)) return;
@@ -28,12 +35,6 @@ system.afterEvents.scriptEventReceive.subscribe(
         break;
       case "database:strain":
         let startTime = Date.now();
-        system.beforeEvents.watchdogTerminate.subscribe((data) => {
-          data.cancel = true;
-          sourceEntity.sendMessage(
-            `§cStrain Failed at: ${~~((Date.now() - startTime) / 1000)} Seconds`
-          );
-        });
         for (let i = 0; i < 1000; i++) {
           let str = "";
           let randomKey = "";

@@ -5,7 +5,7 @@
   "main": "scripts/index.js",
   "repository": {
     "type": "git",
-    "url": "git+hhttps://github.com/smell-of-curry/bedrock-database.git"
+    "url": "git+https://github.com/smell-of-curry/bedrock-database.git"
   },
   "keywords": [
     "mcbe",
@@ -14,7 +14,7 @@
     "script-api"
   ],
   "author": "Smell of curry",
-  "license": "ISC",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/smell-of-curry/bedrock-database/issues"
   },

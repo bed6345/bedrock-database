@@ -104,7 +104,7 @@ table.collection(): { [any]: any }
 ```
 
 ```ts
-table.collection(): Promise<{ [any]: any }>
+table.collectionSync(): Promise<{ [any]: any }>
 ```
 
 ### Delete:
