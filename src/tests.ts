@@ -1,6 +1,11 @@
 import { Player, system } from "@minecraft/server";
 import { TABLES } from "./tables";
 
+// NOTE: `system.beforeEvents.watchdogTerminate` is a Beta-only API and is not
+// available in the stable @minecraft/server module, so the strain test below
+// runs without watchdog protection. If the loop is heavy enough the watchdog
+// may terminate the world.
+
 system.afterEvents.scriptEventReceive.subscribe(
   ({ sourceEntity, message, id }) => {
     if (!(sourceEntity instanceof Player)) return;
@@ -28,12 +33,6 @@ system.afterEvents.scriptEventReceive.subscribe(
         break;
       case "database:strain":
         let startTime = Date.now();
-        system.beforeEvents.watchdogTerminate.subscribe((data) => {
-          data.cancel = true;
-          sourceEntity.sendMessage(
-            `§cStrain Failed at: ${~~((Date.now() - startTime) / 1000)} Seconds`
-          );
-        });
         for (let i = 0; i < 1000; i++) {
           let str = "";
           let randomKey = "";
