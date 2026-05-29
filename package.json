@@ -24,7 +24,7 @@
     "dev": "node build.js dev"
   },
   "devDependencies": {
-    "@minecraft/server": "^1.7.0-beta.1.20.40-stable",
+    "@minecraft/server": "^2.7.0",
     "@types/fs-extra": "^9.0.13",
     "esbuild": "^0.15.18",
     "fs-extra": "^10.1.0"

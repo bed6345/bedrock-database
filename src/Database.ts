@@ -14,7 +14,7 @@ export class Database<T extends any> {
   /**
    * Callbacks to run once the database data has been fetched
    */
-  private onLoadCallback: (data: { [key: string]: T } | null) => void;
+  private onLoadCallback?: (data: { [key: string]: T } | null) => void;
 
   /**
    * Creates a new instance of the Database

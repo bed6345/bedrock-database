@@ -1,12 +1,10 @@
 import { Player, system } from "@minecraft/server";
 import { TABLES } from "./tables";
 
-// Subscribe once so the strain test can survive a watchdog terminate without
-// stacking a new listener every time it runs.
-system.beforeEvents.watchdogTerminate.subscribe((data) => {
-  data.cancel = true;
-  console.warn("[DATABASE]: Watchdog terminate cancelled during strain test.");
-});
+// NOTE: `system.beforeEvents.watchdogTerminate` is a Beta-only API and is not
+// available in the stable @minecraft/server module, so the strain test below
+// runs without watchdog protection. If the loop is heavy enough the watchdog
+// may terminate the world.
 
 system.afterEvents.scriptEventReceive.subscribe(
   ({ sourceEntity, message, id }) => {
