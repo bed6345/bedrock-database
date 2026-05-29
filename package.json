@@ -21,10 +21,12 @@
   "homepage": "https://github.com/smell-of-curry/bedrock-database#readme",
   "scripts": {
     "build": "node build.js",
-    "dev": "node build.js dev"
+    "dev": "node build.js dev",
+    "backend": "node backend/server.js"
   },
   "devDependencies": {
     "@minecraft/server": "^2.7.0",
+    "@minecraft/server-net": "^1.0.0-beta",
     "@types/fs-extra": "^9.0.13",
     "esbuild": "^0.15.18",
     "fs-extra": "^10.1.0"
