@@ -20,7 +20,9 @@ const profiles = new SessionManager<PlayerProfile>({
   apiKey: "super-secret",
   serverId: "survival-1", // <-- change per server, e.g. "lobby", "survival-2"
   tableName: "profiles",
-  autoSaveSeconds: 60,
+  // Data is saved when the player switches servers (leaves). No periodic
+  // auto-save — call profiles.save(player) for changes you can't lose.
+  // (Set autoSaveSeconds to e.g. 60 if you want a periodic crash-safety net.)
   lockTtlSeconds: 120,
 
   // First-time players start here.

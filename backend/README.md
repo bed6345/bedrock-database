@@ -77,9 +77,15 @@ across servers is the *session handoff* pattern, implemented by
 
 ```
 On join  ──► acquire lock(player) ──► load data into memory
-During play ──► read/write in memory (instant) + auto-save every 60s
+During play ──► read/write in memory (instant) + lock heartbeat
 On leave ──► save data ──► release lock(player)
 ```
+
+By default, data is saved **when the player switches servers (leaves)** and
+whenever you call `save(player)` — there is no periodic auto-save. A separate
+lightweight heartbeat keeps the lock alive while they play, so locks never
+expire mid-session. If you want an extra crash-safety net, set
+`autoSaveSeconds` to e.g. `60`.
 
 Because a player only holds their lock on **one server at a time**, you avoid
 the lost-update races of naive live syncing. Locks have a **TTL**, so if a

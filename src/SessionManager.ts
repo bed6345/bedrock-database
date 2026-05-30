@@ -23,17 +23,23 @@ export interface SessionManagerOptions<T> extends RemoteDatabaseOptions {
   defaultData: (player: Player) => T;
 
   /**
-   * How often (seconds) to save every online player's data back to the
-   * backend, so a crash loses at most this much progress. Also refreshes
-   * each player's lock TTL. Set to `0` to disable.
-   * @default 60
+   * How often (seconds) to also save every online player's data back to the
+   * backend as a crash-safety net, on top of the guaranteed save when they
+   * switch servers (leave). `0` means only save on leave and on explicit
+   * {@link SessionManager.save} calls — note that a server crash would then
+   * lose any unsaved progress for that session.
+   *
+   * This does NOT affect lock keep-alive: locks are always refreshed by a
+   * separate lightweight heartbeat (see {@link lockTtlSeconds}).
+   * @default 0
    */
   autoSaveSeconds?: number;
 
   /**
-   * How long (seconds) a player lock survives without a refresh. Should be
-   * comfortably larger than {@link autoSaveSeconds}. If a server crashes,
-   * the lock frees itself after this long.
+   * How long (seconds) a player lock survives without a refresh. A separate
+   * heartbeat refreshes it roughly every `lockTtlSeconds / 2`, so a player
+   * who stays online never loses their lock. If a server crashes, the lock
+   * frees itself after this long.
    * @default 120
    */
   lockTtlSeconds?: number;
@@ -107,7 +113,7 @@ export class SessionManager<T> {
       pollInterval: 0, // we manage freshness via locks + explicit load
     });
 
-    this.registerEvents(options.autoSaveSeconds ?? 60);
+    this.registerEvents(options.autoSaveSeconds ?? 0);
   }
 
   private registerEvents(autoSaveSeconds: number) {
@@ -128,6 +134,18 @@ export class SessionManager<T> {
       );
     });
 
+    // Lightweight lock heartbeat — always on. Refreshes each online
+    // player's lock TTL without writing data, so locks never expire while
+    // someone is still playing (independent of whether auto-save is on).
+    const heartbeatSeconds = Math.max(1, this.lockTtlSeconds / 2);
+    system.runInterval(() => {
+      this.heartbeat().catch((e) =>
+        console.warn(`[SESSION]: Lock heartbeat failed: ${e}`)
+      );
+    }, Math.max(1, Math.floor(heartbeatSeconds * 20)));
+
+    // Optional periodic data save as a crash-safety net. Off by default —
+    // data is otherwise saved on leave (server switch) and via save().
     if (autoSaveSeconds > 0) {
       system.runInterval(() => {
         this.saveAll().catch((e) =>
@@ -174,13 +192,22 @@ export class SessionManager<T> {
   }
 
   /**
-   * Saves every online player's data and refreshes their locks.
+   * Refreshes the lock TTL for every online player without writing data.
+   * Cheap keep-alive so locks don't expire mid-session.
+   */
+  private async heartbeat(): Promise<void> {
+    for (const id of this.sessions.keys()) {
+      // Re-acquiring as the same holder just bumps the TTL.
+      await this.db.acquireLock(id, this.serverId, this.lockTtlSeconds);
+    }
+  }
+
+  /**
+   * Saves every online player's data back to the backend (crash-safety net).
    */
   private async saveAll(): Promise<void> {
     for (const [id, data] of this.sessions) {
       await this.db.set(id, data);
-      // Re-acquiring as the same holder refreshes the TTL (heartbeat).
-      await this.db.acquireLock(id, this.serverId, this.lockTtlSeconds);
     }
   }
 
