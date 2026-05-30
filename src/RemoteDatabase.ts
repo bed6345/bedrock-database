@@ -80,11 +80,14 @@ export class RemoteDatabase<T extends any> {
     this.apiKey = options.apiKey;
     this.useCache = options.cache ?? true;
 
-    // Kick off the initial load. Unlike the local Database this is genuinely
-    // asynchronous, so the queue actually does work here.
-    this.refresh().catch((e) =>
-      console.warn(`[REMOTE-DB]: Failed initial load of "${tableName}": ${e}`)
-    );
+    // Only pre-load the whole table when caching is on. With caching off
+    // every read is a direct single-key fetch, so a full-table download
+    // here would be wasted work (and won't scale on large tables).
+    if (this.useCache) {
+      this.refresh().catch((e) =>
+        console.warn(`[REMOTE-DB]: Failed initial load of "${tableName}": ${e}`)
+      );
+    }
 
     const pollInterval = options.pollInterval ?? 0;
     if (this.useCache && pollInterval > 0) {

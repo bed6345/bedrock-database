@@ -114,7 +114,47 @@ See [`src/sessionExample.ts`](../src/sessionExample.ts) for a fuller example.
 > **Give each server a unique `serverId`.** That's how the backend knows who
 > currently owns a player's lock.
 
+## Scaling to 100-200 players
+
+`SessionManager` is built to scale: it only ever touches **a single player's
+key** on join/leave/save — never the whole table — so cost grows linearly
+with online players, not quadratically.
+
+Per-player request volume:
+
+| When           | Requests                                  |
+| -------------- | ----------------------------------------- |
+| Join           | 1 lock + 1 read (+1 write for new players)|
+| During play    | 1 lock heartbeat every `lockTtlSeconds/2` |
+| Save (on leave)| 1 write + 1 lock release                  |
+
+At 200 players that's roughly **200 heartbeat requests per minute** (~3-4/s)
+plus join/leave traffic. The reference backend handles a 200-player join
+burst (600 requests) in under a second.
+
+The likely ceiling is **not** the backend but Minecraft's `@minecraft/server-net`,
+which throttles outbound HTTP. To stay well under it:
+
+- Keep auto-save off (the default) — save on leave + `save()` only.
+- Don't lower `lockTtlSeconds` too far; a larger TTL means fewer heartbeats.
+- Avoid whole-table calls (`keysSync`/`valuesSync`/`collectionSync`) on hot
+  paths — they download everything.
+- For a big restart (everyone reconnecting at once), the join burst is the
+  heaviest moment; the lock TTL ensures stale locks from the old session
+  expire so reconnects succeed.
+
 ## Production notes
+
+This is a **reference implementation** meant to be clear, not bulletproof.
+For real deployments at 100-200 players consider:
+
+- Swapping the JSON file for **Redis** (recommended) — it has native atomic
+  `INCR` and `SET NX PX` locks, avoids rewriting a whole file on each change,
+  and handles concurrent writes safely. MySQL/MongoDB also work.
+- Putting it behind **HTTPS** (a reverse proxy like Caddy/Nginx) instead of
+  plain HTTP, especially if the servers talk over the internet.
+- Per-key **locking or transactions** if you do read-modify-write beyond the
+  provided atomic `increment`.
 
 This is a **reference implementation** meant to be clear, not bulletproof.
 For real deployments consider:

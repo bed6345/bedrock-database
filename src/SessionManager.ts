@@ -106,11 +106,14 @@ export class SessionManager<T> {
         } catch {}
       });
 
-    // Caching is essential for the session pattern.
+    // SessionManager keeps its own per-player `sessions` map, so the
+    // underlying RemoteDatabase must NOT cache the whole table — every
+    // load/save touches only a single player's key. This is what lets it
+    // scale to hundreds of players without O(n) downloads on each join.
     this.db = new RemoteDatabase<T>(options.tableName ?? "players", {
       ...options,
-      cache: true,
-      pollInterval: 0, // we manage freshness via locks + explicit load
+      cache: false,
+      pollInterval: 0,
     });
 
     this.registerEvents(options.autoSaveSeconds ?? 0);
@@ -170,8 +173,7 @@ export class SessionManager<T> {
       return;
     }
 
-    // Pull the freshest copy from the backend (not just the cached one).
-    await this.db.refresh();
+    // Fetch only THIS player's key (cache is off), not the whole table.
     let data = await this.db.getSync(id);
     if (data === null) {
       data = this.defaultData(player);
