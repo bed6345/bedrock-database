@@ -19,6 +19,7 @@ esbuild
     watch: isDev,
     external: [
       "@minecraft/server",
+      "@minecraft/server-net",
     ],
     legalComments: isDev ? "none" : "none",
   })
