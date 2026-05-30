@@ -46,6 +46,29 @@ function table(name) {
   return store[name];
 }
 
+/**
+ * Player/resource locks, keyed by owner (e.g. a player id).
+ * shape: { [owner]: { holder, expiresAt } }
+ * Locks are kept in memory only — a backend restart releases them all,
+ * which is the safe default.
+ */
+const locks = {};
+
+/**
+ * Tries to grab a lock. Succeeds if it's free, expired, or already held by
+ * the same holder (which also refreshes the TTL — used as a heartbeat).
+ * @returns `{ acquired, heldBy }`
+ */
+function acquireLock(owner, holder, ttlMs) {
+  const now = Date.now();
+  const existing = locks[owner];
+  if (existing && existing.expiresAt > now && existing.holder !== holder) {
+    return { acquired: false, heldBy: existing.holder };
+  }
+  locks[owner] = { holder, expiresAt: now + ttlMs };
+  return { acquired: true, heldBy: holder };
+}
+
 function send(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
@@ -76,12 +99,34 @@ const server = http.createServer(async (req, res) => {
   // Path: /tables/:table            -> whole table  (GET, DELETE)
   //       /tables/:table/:key       -> single key   (GET, PUT, DELETE)
   //       /tables/:table/:key/increment -> atomic +n (POST)
+  //       /locks/:owner             -> lock         (PUT to acquire, DELETE to release)
   const parts = decodeURIComponent(req.url.split("?")[0])
     .split("/")
     .filter(Boolean)
     .map((p) => decodeURIComponent(p));
 
   try {
+    // ---- Locks ------------------------------------------------------
+    if (parts[0] === "locks" && parts[1]) {
+      const owner = parts[1];
+      if (req.method === "PUT") {
+        const { holder, ttl = 120 } = await readBody(req);
+        if (!holder)
+          return send(res, 400, { ok: false, error: "holder required" });
+        const result = acquireLock(owner, holder, ttl * 1000);
+        return send(res, 200, { ok: true, data: result });
+      }
+      if (req.method === "DELETE") {
+        const { holder } = await readBody(req);
+        const existing = locks[owner];
+        // Only the current holder may release the lock.
+        const released = !!existing && existing.holder === holder;
+        if (released) delete locks[owner];
+        return send(res, 200, { ok: true, data: { released } });
+      }
+      return send(res, 405, { ok: false, error: "Method not allowed" });
+    }
+
     if (parts[0] !== "tables" || !parts[1]) {
       return send(res, 404, { ok: false, error: "Not found" });
     }

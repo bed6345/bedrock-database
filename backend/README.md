@@ -56,16 +56,57 @@ await money.increment(player.id, 10);
 
 ## HTTP API
 
-| Method   | Path                                  | Purpose                          |
-| -------- | ------------------------------------- | -------------------------------- |
-| `GET`    | `/tables/:table`                      | Fetch the whole table.           |
-| `DELETE` | `/tables/:table`                      | Clear the whole table.           |
-| `GET`    | `/tables/:table/:key`                 | Read a single key.               |
-| `PUT`    | `/tables/:table/:key`                 | Set a key (`{ "value": ... }`).  |
-| `DELETE` | `/tables/:table/:key`                 | Delete a key.                    |
-| `POST`   | `/tables/:table/:key/increment`       | Atomic add (`{ "amount": n }`).  |
+| Method   | Path                                  | Purpose                                  |
+| -------- | ------------------------------------- | ---------------------------------------- |
+| `GET`    | `/tables/:table`                      | Fetch the whole table.                   |
+| `DELETE` | `/tables/:table`                      | Clear the whole table.                   |
+| `GET`    | `/tables/:table/:key`                 | Read a single key.                       |
+| `PUT`    | `/tables/:table/:key`                 | Set a key (`{ "value": ... }`).          |
+| `DELETE` | `/tables/:table/:key`                 | Delete a key.                            |
+| `POST`   | `/tables/:table/:key/increment`       | Atomic add (`{ "amount": n }`).          |
+| `PUT`    | `/locks/:owner`                       | Acquire/refresh a lock (`{ "holder", "ttl" }`). |
+| `DELETE` | `/locks/:owner`                       | Release a lock (`{ "holder" }`).         |
 
 Every response is JSON shaped like `{ "ok": true, "data": ... }`.
+
+## Syncing player data across servers (Session Handoff)
+
+The recommended way to share **per-player** data (coins, rank, inventory…)
+across servers is the *session handoff* pattern, implemented by
+`SessionManager`:
+
+```
+On join  ──► acquire lock(player) ──► load data into memory
+During play ──► read/write in memory (instant) + auto-save every 60s
+On leave ──► save data ──► release lock(player)
+```
+
+Because a player only holds their lock on **one server at a time**, you avoid
+the lost-update races of naive live syncing. Locks have a **TTL**, so if a
+server crashes the lock frees itself automatically.
+
+```ts
+import { SessionManager } from "./SessionManager";
+
+const profiles = new SessionManager<{ coins: number; rank: string }>({
+  endpoint: "http://127.0.0.1:3000",
+  apiKey: "super-secret",
+  serverId: "survival-1", // unique per server
+  defaultData: () => ({ coins: 0, rank: "Newbie" }),
+  onLoad: (player, data) => player.sendMessage(`Coins: ${data.coins}`),
+});
+
+// During play — instant, in-memory:
+profiles.update(player, (p) => ({ ...p, coins: p.coins + 1 }));
+
+// Important change you can't lose — flush immediately:
+await profiles.save(player);
+```
+
+See [`src/sessionExample.ts`](../src/sessionExample.ts) for a fuller example.
+
+> **Give each server a unique `serverId`.** That's how the backend knows who
+> currently owns a player's lock.
 
 ## Production notes
 

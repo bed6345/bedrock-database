@@ -257,6 +257,44 @@ export class RemoteDatabase<T extends any> {
   }
 
   /**
+   * Tries to acquire a lock for `owner` (e.g. a player id) on behalf of
+   * `holder` (e.g. this server's id). Re-acquiring with the same holder
+   * refreshes the TTL, so it doubles as a heartbeat.
+   * @param owner - The resource being locked, usually a player id.
+   * @param holder - Who is taking the lock, usually this server's id.
+   * @param ttlSeconds - How long the lock survives without a refresh. The
+   *   TTL means a crashed server's locks free themselves automatically.
+   * @returns `{ acquired, heldBy }` — `acquired` is `false` if another
+   *   holder currently owns the lock.
+   */
+  async acquireLock(
+    owner: string,
+    holder: string,
+    ttlSeconds = 120
+  ): Promise<{ acquired: boolean; heldBy: string }> {
+    const res = await this.request<{ acquired: boolean; heldBy: string }>(
+      HttpRequestMethod.Put,
+      `/locks/${encodeURIComponent(owner)}`,
+      { holder, ttl: ttlSeconds }
+    );
+    return res.data ?? { acquired: false, heldBy: "" };
+  }
+
+  /**
+   * Releases a lock previously taken by `holder`. A no-op if someone else
+   * holds it.
+   * @returns `true` if the lock was actually released.
+   */
+  async releaseLock(owner: string, holder: string): Promise<boolean> {
+    const res = await this.request<{ released: boolean }>(
+      HttpRequestMethod.Delete,
+      `/locks/${encodeURIComponent(owner)}`,
+      { holder }
+    );
+    return res.data?.released ?? false;
+  }
+
+  /**
    * Clears every key in the table on the backend (and the local cache).
    */
   async clear(): Promise<void> {
