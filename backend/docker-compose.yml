@@ -1,0 +1,33 @@
+# Redis-backed sync backend for Bedrock servers.
+#   docker compose up -d
+# Configure via a .env file in this directory (see .env.example).
+
+services:
+  redis:
+    image: redis:7-alpine
+    # AOF persistence so player data survives restarts.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build: .
+    environment:
+      PORT: ${PORT:-3000}
+      API_KEY: ${API_KEY:-}
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:

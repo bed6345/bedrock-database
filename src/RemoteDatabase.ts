@@ -36,6 +36,30 @@ export interface RemoteDatabaseOptions {
    * @default 0
    */
   pollInterval?: number;
+
+  /**
+   * How many times to retry a failed request (network error or 5xx) before
+   * giving up, using exponential backoff. Client errors (4xx) are never
+   * retried.
+   * @default 3
+   */
+  maxRetries?: number;
+
+  /**
+   * Base delay (ms) for retry backoff: attempt n waits ~`retryBaseMs * 2^n`.
+   * @default 300
+   */
+  retryBaseMs?: number;
+
+  /**
+   * If `true`, a `set()` whose write ultimately fails (backend unreachable
+   * even after retries) is kept in an in-memory buffer and re-sent
+   * automatically once the backend recovers, instead of being lost. The
+   * latest value per key wins. Note: this buffer lives in memory, so a
+   * server crash while the backend is down still loses those writes.
+   * @default true
+   */
+  bufferWrites?: boolean;
 }
 
 /**
@@ -62,6 +86,9 @@ export class RemoteDatabase<T extends any> {
   private readonly endpoint: string;
   private readonly apiKey?: string;
   private readonly useCache: boolean;
+  private readonly maxRetries: number;
+  private readonly retryBaseMs: number;
+  private readonly bufferWrites: boolean;
 
   /**
    * Local copy of the table. `null` until the first successful fetch.
@@ -74,11 +101,21 @@ export class RemoteDatabase<T extends any> {
    */
   private QUEUE: Array<() => void> = [];
 
+  /**
+   * Writes that failed while the backend was unreachable, keyed by key so
+   * the latest value wins. Drained by a background flusher.
+   */
+  private pendingWrites = new Map<string, T>();
+  private flushScheduled = false;
+
   constructor(public tableName: string, options: RemoteDatabaseOptions) {
     this.tableName = tableName;
     this.endpoint = options.endpoint.replace(/\/$/, "");
     this.apiKey = options.apiKey;
     this.useCache = options.cache ?? true;
+    this.maxRetries = options.maxRetries ?? 3;
+    this.retryBaseMs = options.retryBaseMs ?? 300;
+    this.bufferWrites = options.bufferWrites ?? true;
 
     // Only pre-load the whole table when caching is on. With caching off
     // every read is a direct single-key fetch, so a full-table download
@@ -110,6 +147,34 @@ export class RemoteDatabase<T extends any> {
     path: string,
     body?: unknown
   ): Promise<ApiResponse<R>> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      try {
+        return await this.doRequest<R>(method, path, body);
+      } catch (e: any) {
+        lastError = e;
+        // Don't retry client errors (4xx) — they won't get better.
+        if (typeof e?.status === "number" && e.status >= 400 && e.status < 500) {
+          throw e;
+        }
+        if (attempt < this.maxRetries) {
+          await this.delay(this.retryBaseMs * Math.pow(2, attempt));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Performs a single HTTP attempt. Throws an error carrying the HTTP
+   * `status` (when there was a response) so the retry layer can decide
+   * whether the failure is worth retrying.
+   */
+  private async doRequest<R>(
+    method: HttpRequestMethod,
+    path: string,
+    body?: unknown
+  ): Promise<ApiResponse<R>> {
     const req = new HttpRequest(`${this.endpoint}${path}`);
     req.method = method;
     const headers = [new HttpHeader("Content-Type", "application/json")];
@@ -119,9 +184,21 @@ export class RemoteDatabase<T extends any> {
 
     const res = await http.request(req);
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(`HTTP ${res.status}: ${res.body}`);
+      const err: any = new Error(`HTTP ${res.status}: ${res.body}`);
+      err.status = res.status;
+      throw err;
     }
     return JSON.parse(res.body) as ApiResponse<R>;
+  }
+
+  /**
+   * Resolves after roughly `ms` milliseconds, using the tick scheduler
+   * (1 tick ≈ 50ms). Used for retry backoff.
+   */
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      system.runTimeout(resolve, Math.max(1, Math.ceil(ms / 50)));
+    });
   }
 
   /**
@@ -156,15 +233,71 @@ export class RemoteDatabase<T extends any> {
 
   /**
    * Sets `key` to `value` on the backend (and updates the local cache).
+   *
+   * If the write ultimately fails (backend unreachable even after retries)
+   * and {@link RemoteDatabaseOptions.bufferWrites} is on, the value is kept
+   * in an in-memory buffer and re-sent automatically once the backend
+   * recovers — so a transient outage doesn't lose the write. The error is
+   * still thrown so callers can react if they need to.
    * @returns once the backend has acknowledged the write.
    */
   async set(key: string, value: T): Promise<void> {
+    if (this.useCache && this.MEMORY) this.MEMORY[key] = value;
+    try {
+      await this.writeKey(key, value);
+    } catch (e) {
+      if (!this.bufferWrites) throw e;
+      this.pendingWrites.set(key, value);
+      this.scheduleFlush();
+      throw e;
+    }
+  }
+
+  /**
+   * Sends a single key's value to the backend (no buffering).
+   */
+  private async writeKey(key: string, value: T): Promise<void> {
     await this.request(
       HttpRequestMethod.Put,
       `/tables/${encodeURIComponent(this.tableName)}/${encodeURIComponent(key)}`,
       { value }
     );
-    if (this.useCache && this.MEMORY) this.MEMORY[key] = value;
+  }
+
+  /**
+   * Starts a background loop that keeps retrying buffered writes until the
+   * backend accepts them. No-op if already running or nothing is buffered.
+   */
+  private scheduleFlush(): void {
+    if (this.flushScheduled || this.pendingWrites.size === 0) return;
+    this.flushScheduled = true;
+    const attempt = async () => {
+      // Snapshot so concurrent set()s can keep adding to the live buffer.
+      for (const [key, value] of [...this.pendingWrites]) {
+        try {
+          await this.writeKey(key, value);
+          // Only clear if no newer value was buffered in the meantime.
+          if (this.pendingWrites.get(key) === value)
+            this.pendingWrites.delete(key);
+        } catch {
+          // Backend still down — wait and try the whole buffer again.
+          await this.delay(this.retryBaseMs * 10);
+          return attempt();
+        }
+      }
+      this.flushScheduled = false;
+      // A set() may have buffered more while we were flushing.
+      if (this.pendingWrites.size > 0) this.scheduleFlush();
+    };
+    attempt();
+  }
+
+  /**
+   * Number of writes currently buffered waiting for the backend to recover.
+   * Useful for health checks / metrics.
+   */
+  pendingWriteCount(): number {
+    return this.pendingWrites.size;
   }
 
   /**

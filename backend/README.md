@@ -15,6 +15,10 @@ the other.
 > `@minecraft/server-net` module that `RemoteDatabase` relies on is not
 > available on Realms or normal Minecraft clients.
 
+> **Deploying for real?** See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the BDS
+> `@minecraft/server-net` allow-list setup, a Docker Compose stack (Redis with
+> persistence), and HTTPS notes.
+
 ## Two backends, same API
 
 | File              | Storage        | Use for                                    |

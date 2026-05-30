@@ -45,9 +45,24 @@ export interface SessionManagerOptions<T> extends RemoteDatabaseOptions {
   lockTtlSeconds?: number;
 
   /**
-   * Called when the player's lock is held by another server — meaning they
-   * are (or recently were) on a different server and we can't safely load
-   * their data yet. Default behaviour: warn them and kick.
+   * How many times to retry acquiring a player's lock before giving up and
+   * calling {@link onLockBusy}. This smooths over the brief window when a
+   * player switches servers and the old server hasn't released their lock
+   * yet, so they aren't kicked for a momentary overlap.
+   * @default 5
+   */
+  lockRetries?: number;
+
+  /**
+   * Delay (seconds) between lock-acquire retries.
+   * @default 1
+   */
+  lockRetrySeconds?: number;
+
+  /**
+   * Called when the player's lock is still held by another server after all
+   * {@link lockRetries} — meaning they are genuinely still active elsewhere
+   * and we can't safely load their data. Default behaviour: warn and kick.
    */
   onLockBusy?: (player: Player, heldBy: string) => void;
 
@@ -76,6 +91,8 @@ export class SessionManager<T> {
   private readonly serverId: string;
   private readonly defaultData: (player: Player) => T;
   private readonly lockTtlSeconds: number;
+  private readonly lockRetries: number;
+  private readonly lockRetrySeconds: number;
   private readonly onLockBusy: (player: Player, heldBy: string) => void;
   private readonly onLoadCallback?: (player: Player, data: T) => void;
 
@@ -88,6 +105,8 @@ export class SessionManager<T> {
     this.serverId = options.serverId;
     this.defaultData = options.defaultData;
     this.lockTtlSeconds = options.lockTtlSeconds ?? 120;
+    this.lockRetries = options.lockRetries ?? 5;
+    this.lockRetrySeconds = options.lockRetrySeconds ?? 1;
     this.onLoadCallback = options.onLoad;
     this.onLockBusy =
       options.onLockBusy ??
@@ -163,11 +182,17 @@ export class SessionManager<T> {
    */
   private async load(player: Player): Promise<void> {
     const id = player.id;
-    const lock = await this.db.acquireLock(
-      id,
-      this.serverId,
-      this.lockTtlSeconds
-    );
+
+    // Retry the lock a few times: when a player hops from server A to B, A
+    // may not have released their lock yet. Backing off avoids kicking them
+    // for that brief overlap.
+    let lock = await this.db.acquireLock(id, this.serverId, this.lockTtlSeconds);
+    for (let i = 0; i < this.lockRetries && !lock.acquired; i++) {
+      await this.delay(this.lockRetrySeconds * 1000);
+      // Bail out if they already left again during the wait.
+      if (!player.isValid()) return;
+      lock = await this.db.acquireLock(id, this.serverId, this.lockTtlSeconds);
+    }
     if (!lock.acquired) {
       this.onLockBusy(player, lock.heldBy);
       return;
@@ -181,6 +206,15 @@ export class SessionManager<T> {
     }
     this.sessions.set(id, data);
     this.onLoadCallback?.(player, data);
+  }
+
+  /**
+   * Resolves after roughly `ms` milliseconds via the tick scheduler.
+   */
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      system.runTimeout(resolve, Math.max(1, Math.ceil(ms / 50)));
+    });
   }
 
   /**
