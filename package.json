@@ -22,7 +22,8 @@
   "scripts": {
     "build": "node build.js",
     "dev": "node build.js dev",
-    "build:server": "ENTRY=src/index.dev.ts node build.js",
+    "build:server": "node build.js --entry=src/index.dev.ts",
+    "dev:server": "node build.js dev --entry=src/index.dev.ts",
     "add-server": "node dev/add-server.js",
     "backend": "node backend/server.js",
     "backend:redis": "node backend/server.redis.js"

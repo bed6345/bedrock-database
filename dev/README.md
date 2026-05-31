@@ -28,7 +28,7 @@ servers (`survival-1` / `survival-2`) via `@minecraft/server-admin` variables.
 
    ```bash
    npm install
-   npm run build:server      # ENTRY=src/index.dev.ts -> scripts/index.js
+   npm run build:server      # builds src/index.dev.ts -> scripts/index.js
    ```
 
 2. **Start the stack** from the repo root:
