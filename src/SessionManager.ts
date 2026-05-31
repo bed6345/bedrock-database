@@ -170,7 +170,7 @@ export class SessionManager<T> {
     // data is otherwise saved on leave (server switch) and via save().
     if (autoSaveSeconds > 0) {
       system.runInterval(() => {
-        this.saveAll().catch((e) =>
+        this.flushAll().catch((e) =>
           console.warn(`[SESSION]: Auto-save failed: ${e}`)
         );
       }, Math.max(1, Math.floor(autoSaveSeconds * 20)));
@@ -239,12 +239,42 @@ export class SessionManager<T> {
   }
 
   /**
-   * Saves every online player's data back to the backend (crash-safety net).
+   * Saves every online player's data to the backend right now, keeping their
+   * locks and in-memory state intact. A safe manual snapshot you can trigger
+   * any time (e.g. before a risky operation); it does not disconnect anyone.
+   * Also used by the optional periodic auto-save.
    */
-  private async saveAll(): Promise<void> {
-    for (const [id, data] of this.sessions) {
-      await this.db.set(id, data);
+  async flushAll(): Promise<void> {
+    for (const [id, data] of [...this.sessions]) {
+      try {
+        await this.db.set(id, data);
+      } catch (e) {
+        console.warn(`[SESSION]: flush save failed for ${id}: ${e}`);
+      }
     }
+  }
+
+  /**
+   * Saves every online player's data AND releases their locks, then clears
+   * the in-memory sessions. Call this from an admin command immediately
+   * before stopping the server: Bedrock has no reliable script shutdown
+   * event, so this is the safe way to guarantee a clean save + unlock and
+   * avoid locks lingering until their TTL expires.
+   */
+  async shutdown(): Promise<void> {
+    for (const [id, data] of [...this.sessions]) {
+      try {
+        await this.db.set(id, data);
+      } catch (e) {
+        console.warn(`[SESSION]: shutdown save failed for ${id}: ${e}`);
+      }
+      try {
+        await this.db.releaseLock(id, this.serverId);
+      } catch (e) {
+        console.warn(`[SESSION]: shutdown unlock failed for ${id}: ${e}`);
+      }
+    }
+    this.sessions.clear();
   }
 
   /**

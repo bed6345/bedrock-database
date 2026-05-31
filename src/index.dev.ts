@@ -1,4 +1,4 @@
-import { world } from "@minecraft/server";
+import { system, world } from "@minecraft/server";
 import { variables } from "@minecraft/server-admin";
 import { SessionManager } from "./SessionManager";
 
@@ -68,3 +68,21 @@ world.afterEvents.playerSpawn.subscribe(({ player, initialSpawn }) => {
   const p = profiles.get(player);
   if (p) player.sendMessage(`§b[${serverId}] Coins: ${p.coins}`);
 });
+
+// Admin commands — run BEFORE stopping/restarting the server:
+//   /scriptevent admin:shutdown  -> save everyone + release their locks (use before stop)
+//   /scriptevent admin:flush     -> save everyone, keep them playing (snapshot)
+system.afterEvents.scriptEventReceive.subscribe(
+  ({ id }) => {
+    if (id === "admin:shutdown") {
+      profiles
+        .shutdown()
+        .then(() => console.warn(`[${serverId}] Saved + unlocked all players — safe to stop.`));
+    } else if (id === "admin:flush") {
+      profiles
+        .flushAll()
+        .then(() => console.warn(`[${serverId}] Flushed all player data.`));
+    }
+  },
+  { namespaces: ["admin"] }
+);

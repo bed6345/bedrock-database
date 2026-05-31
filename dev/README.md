@@ -53,6 +53,25 @@ servers (`survival-1` / `survival-2`) via `@minecraft/server-admin` variables.
    counter), switch to survival-2 — your coins follow you. That's the
    cross-server sync working through the proxy.
 
+## Stopping / restarting a server safely
+
+Bedrock has no reliable in-script "server stopping" event, so to avoid losing
+unsaved data or leaving locks stuck, **save and release before you stop**:
+
+1. Drain players off the server (transfer them to the lobby via the proxy).
+2. In-game (as op) run **`/scriptevent admin:shutdown`** — this saves every
+   online player and releases their locks. Wait for the
+   `Saved + unlocked all players` log line.
+3. Then stop the container: `docker compose -f docker-compose.dev.yml stop bds-1`.
+
+`/scriptevent admin:flush` saves everyone *without* disconnecting — a safe
+snapshot you can run any time. For unattended crash safety, also set
+`autoSaveSeconds` on the `SessionManager` (e.g. `30`).
+
+> Restarting with the **same `serverId`** is safe: the restarted server
+> re-acquires its own locks, and `@minecraft/server-net` retries + the offline
+> write buffer ride out a brief backend/Redis restart.
+
 ## What's mounted where
 
 | Host path                         | In container                                                        |
