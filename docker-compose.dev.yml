@@ -42,8 +42,9 @@ services:
       LEVEL_NAME: world
       GAMEMODE: survival
       ONLINE_MODE: "false"
-    ports:
-      - "19132:19132/udp"
+    # No host port: players reach this server through the WaterdogPE proxy.
+    expose:
+      - "19132/udp"
     volumes:
       - ./dev/bds1/data:/data
       - ./manifest.json:/data/behavior_packs/bedrock-database/manifest.json:ro
@@ -65,8 +66,8 @@ services:
       LEVEL_NAME: world
       GAMEMODE: survival
       ONLINE_MODE: "false"
-    ports:
-      - "19133:19132/udp"
+    expose:
+      - "19132/udp"
     volumes:
       - ./dev/bds2/data:/data
       - ./manifest.json:/data/behavior_packs/bedrock-database/manifest.json:ro
@@ -78,6 +79,33 @@ services:
     tty: true
     depends_on:
       - backend
+
+  # WaterdogPE proxy — the single public entrypoint. Players connect here and
+  # are routed to (and transferred between) the two downstream BDS servers.
+  waterdog:
+    image: eclipse-temurin:17-jre-alpine
+    working_dir: /waterdog
+    # Downloads the WaterdogPE jar on first run, then launches it. The config
+    # and jar persist in ./dev/waterdog.
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ ! -f Waterdog.jar ]; then
+          echo "Downloading WaterdogPE..."
+          wget -O Waterdog.jar "https://jenkins.waterdog.dev/job/Waterdog/job/WaterdogPE/job/release/lastSuccessfulBuild/artifact/target/Waterdog.jar"
+        fi
+        exec java -Dterminal.ansi=true -Xms128M -Xmx512M -jar Waterdog.jar
+    ports:
+      - "19132:19132/udp"
+    volumes:
+      - ./dev/waterdog:/waterdog
+    stdin_open: true
+    tty: true
+    depends_on:
+      - bds-1
+      - bds-2
 
 volumes:
   redis-dev-data:

@@ -1,19 +1,24 @@
-# Two-Server Dev Stack
+# Two-Server Dev Stack (with WaterdogPE proxy)
 
-Run **Redis + the sync backend + two Bedrock Dedicated Servers** locally to
-test cross-server data sync end-to-end. Both BDS run the same behavior pack
-but identify as different servers (`survival-1` / `survival-2`) via
-`@minecraft/server-admin` variables.
+Run a **WaterdogPE proxy + two Bedrock Dedicated Servers + sync backend +
+Redis** locally to test cross-server data sync end-to-end. Players connect to
+the **proxy** (one address) and are transferred seamlessly between the two
+downstream BDS. Both BDS run the same behavior pack but identify as different
+servers (`survival-1` / `survival-2`) via `@minecraft/server-admin` variables.
 
 ```
-┌─────────┐   ┌─────────┐
-│  bds-1  │   │  bds-2  │   :19132 / :19133
-│survival-1│  │survival-2│
-└────┬────┘   └────┬────┘
-     └──────┬──────┘
-         ┌──▼──┐    ┌───────┐
-         │backend│──▶│ redis │
-         └─────┘    └───────┘
+        client ──▶ ┌───────────┐  :19132 (only public port)
+                   │ WaterdogPE │
+                   └─────┬─────┘
+              ┌──────────┴──────────┐
+        ┌─────▼────┐           ┌─────▼────┐
+        │  bds-1   │           │  bds-2   │   (internal only)
+        │survival-1│           │survival-2│
+        └─────┬────┘           └─────┬────┘
+              └──────────┬──────────┘
+                     ┌───▼───┐   ┌───────┐
+                     │backend│──▶│ redis │
+                     └───────┘   └───────┘
 ```
 
 ## Steps
@@ -32,12 +37,21 @@ but identify as different servers (`survival-1` / `survival-2`) via
    docker compose -f docker-compose.dev.yml up
    ```
 
-3. **Connect** Minecraft Bedrock to both servers (Add Server):
-   - `127.0.0.1` port `19132` → survival-1
-   - `127.0.0.1` port `19133` → survival-2
+3. **Connect** Minecraft Bedrock to the **proxy** (Add Server):
+   - `127.0.0.1` port `19132` → lands on `lobby` (survival-1 by default)
 
-4. **Test the sync**: break some blocks on survival-1 (you'll see a coin
-   counter), then disconnect and join survival-2 — your coins follow you.
+   The downstream BDS are not exposed directly — everything goes through the
+   proxy.
+
+4. **Switch servers** to the second BDS. WaterdogPE routes between downstream
+   servers; depending on your WaterdogPE version/plugins you transfer with a
+   command such as the vanilla `/transfer` or a Waterdog server-switch
+   command/NPC. (Any plugin that moves the player between the `lobby` and
+   `survival` entries works.)
+
+5. **Test the sync**: break some blocks on survival-1 (you'll see a coin
+   counter), switch to survival-2 — your coins follow you. That's the
+   cross-server sync working through the proxy.
 
 ## What's mounted where
 
@@ -48,6 +62,8 @@ but identify as different servers (`survival-1` / `survival-2`) via
 | `dev/bds{1,2}/permissions.json`   | script module config (allows `server-net` + `server-admin`)         |
 | `dev/bds{1,2}/variables.json`     | per-server `server_id` / endpoint / api key                         |
 | `dev/bds{1,2}/data`               | the world + server files (gitignored)                               |
+| `dev/waterdog/config.yml`         | WaterdogPE proxy config (listener + downstream servers)             |
+| `dev/waterdog/` (rest)            | downloaded `Waterdog.jar` + generated files (gitignored)            |
 
 ## ⚠️ Important caveats
 
@@ -74,3 +90,21 @@ These are inherent to BDS, not the stack:
 4. **First boot generates the world**, so the `world_behavior_packs.json`
    activation should apply on a fresh `dev/bds{1,2}/data`. If you started once
    before adding it, delete `dev/bds{1,2}/data` and bring the stack back up.
+
+### WaterdogPE notes
+
+- **Downstream BDS must be offline-mode** (`ONLINE_MODE: "false"`, already
+  set) because the proxy handles Xbox auth. Don't expose the BDS ports
+  publicly — only the proxy.
+- **Config schema may vary by version.** The official docs were unreachable
+  when this was written, so `dev/waterdog/config.yml` is a best-effort
+  starting point. WaterdogPE merges defaults on first start; if it complains
+  about a key, let it generate a fresh `config.yml` (start the `waterdog`
+  service once with an empty `dev/waterdog/`), then copy the `servers` and
+  `priorities` blocks into the generated file.
+- **The jar is downloaded at runtime** from the WaterdogPE Jenkins
+  (`Waterdog.jar`) into `dev/waterdog/` — it is not committed.
+- **Java 17+** is required (the image is `eclipse-temurin:17-jre-alpine`).
+- **Server switching** between `lobby` and `survival` depends on your
+  WaterdogPE plugins/commands; the sync itself works regardless, because each
+  downstream join/leave triggers `SessionManager` the same way.
