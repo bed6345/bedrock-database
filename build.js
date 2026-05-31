@@ -1,6 +1,17 @@
 const esbuild = require("esbuild");
 const fsExtra = require("fs-extra");
-const isDev = process.argv[2] === "dev";
+
+const args = process.argv.slice(2);
+const isDev = args.includes("dev");
+
+// Allow overriding the entry point to build the two-server demo pack. Use the
+// cross-platform flag `--entry=src/index.dev.ts` (works on Windows/macOS/Linux);
+// the ENTRY env var is still honored for backwards compatibility. Defaults to
+// the normal library entry.
+const entryArg = args.find((a) => a.startsWith("--entry="));
+const entry = entryArg
+  ? entryArg.slice("--entry=".length)
+  : process.env.ENTRY || "src/index.ts";
 
 const dir = "./scripts";
 
@@ -11,7 +22,7 @@ fsExtra.emptyDirSync(dir);
 
 esbuild
   .build({
-    entryPoints: ["src/index.ts"],
+    entryPoints: [entry],
     bundle: true,
     outfile: "scripts/index.js",
     minify: !isDev,
@@ -19,6 +30,8 @@ esbuild
     watch: isDev,
     external: [
       "@minecraft/server",
+      "@minecraft/server-net",
+      "@minecraft/server-admin",
     ],
     legalComments: isDev ? "none" : "none",
   })
@@ -26,6 +39,6 @@ esbuild
     console.log(
       `\x1b[33m%s\x1b[0m`,
       `[${new Date().toLocaleTimeString()}]`,
-      `Built for ${isDev ? "development" : "production"}...`
+      `Built "${entry}" for ${isDev ? "development" : "production"}...`
     );
   });

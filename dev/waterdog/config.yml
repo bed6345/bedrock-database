@@ -1,0 +1,30 @@
+# WaterdogPE proxy config for the local two-server dev network.
+#
+# WaterdogPE merges any missing keys with its defaults on first start (and may
+# rewrite this file with the full set of options). If a key name here differs
+# from your WaterdogPE version, let it generate a fresh config.yml first, then
+# copy the `servers` + `priorities` below into it.
+
+listener:
+  motd: "§bBedrock Database Dev Network"
+  # What players connect to (the proxy's bind address).
+  host: 0.0.0.0:19132
+  max_players: 100
+  # Where players land on join; the first reachable one is the fallback.
+  priorities:
+    - lobby
+
+# Downstream Bedrock Dedicated Servers (reached over the compose network).
+servers:
+  lobby:
+    address: bds-1:19132
+    server_type: bedrock
+  survival:
+    address: bds-2:19132
+    server_type: bedrock
+
+# Local LAN testing — skip Xbox auth at the proxy. Set to true for production.
+online_mode: false
+
+# The proxy initiates the downstream connection; forward the real client info.
+ip_forward: true

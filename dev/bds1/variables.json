@@ -1,0 +1,5 @@
+{
+  "server_id": "survival-1",
+  "db_endpoint": "http://backend:3000",
+  "db_api_key": "super-secret"
+}

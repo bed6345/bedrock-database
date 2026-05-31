@@ -1,1 +1,6 @@
 node_modules
+backend/data.json
+backend/.env
+dev/*/data
+dev/waterdog/*
+!dev/waterdog/config.yml
