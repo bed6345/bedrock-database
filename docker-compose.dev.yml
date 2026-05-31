@@ -1,0 +1,83 @@
+# Local two-server dev stack: Redis + sync backend + TWO Bedrock Dedicated
+# Servers, both running the same behavior pack but with different serverIds.
+# Use it to verify cross-server data sync end-to-end.
+#
+#   1. Build the demo pack:   ENTRY=src/index.dev.ts npm run build   (or: npm run build:server)
+#   2. Start everything:      docker compose -f docker-compose.dev.yml up
+#   3. Connect Minecraft to   127.0.0.1:19132  and  127.0.0.1:19133
+#
+# See dev/README.md for the important caveats (EULA, Beta APIs experiment,
+# and matching the BDS VERSION to the pack's @minecraft/server module version).
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-dev-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build: ./backend
+    environment:
+      PORT: "3000"
+      API_KEY: super-secret
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  bds-1:
+    image: itzg/minecraft-bedrock-server
+    # Pin a version whose @minecraft/server API matches manifest.json. Adjust
+    # if your pack's module versions differ.
+    environment:
+      EULA: "TRUE"
+      VERSION: "1.20.81"
+      SERVER_NAME: survival-1
+      LEVEL_NAME: world
+      GAMEMODE: survival
+      ONLINE_MODE: "false"
+    ports:
+      - "19132:19132/udp"
+    volumes:
+      - ./dev/bds1/data:/data
+      - ./manifest.json:/data/behavior_packs/bedrock-database/manifest.json:ro
+      - ./scripts:/data/behavior_packs/bedrock-database/scripts:ro
+      - ./dev/world_behavior_packs.json:/data/worlds/world/world_behavior_packs.json
+      - ./dev/bds1/permissions.json:/data/config/ec8cf691-28e0-40d6-980c-8506cd5a4742/permissions.json:ro
+      - ./dev/bds1/variables.json:/data/config/ec8cf691-28e0-40d6-980c-8506cd5a4742/variables.json:ro
+    stdin_open: true
+    tty: true
+    depends_on:
+      - backend
+
+  bds-2:
+    image: itzg/minecraft-bedrock-server
+    environment:
+      EULA: "TRUE"
+      VERSION: "1.20.81"
+      SERVER_NAME: survival-2
+      LEVEL_NAME: world
+      GAMEMODE: survival
+      ONLINE_MODE: "false"
+    ports:
+      - "19133:19132/udp"
+    volumes:
+      - ./dev/bds2/data:/data
+      - ./manifest.json:/data/behavior_packs/bedrock-database/manifest.json:ro
+      - ./scripts:/data/behavior_packs/bedrock-database/scripts:ro
+      - ./dev/world_behavior_packs.json:/data/worlds/world/world_behavior_packs.json
+      - ./dev/bds2/permissions.json:/data/config/ec8cf691-28e0-40d6-980c-8506cd5a4742/permissions.json:ro
+      - ./dev/bds2/variables.json:/data/config/ec8cf691-28e0-40d6-980c-8506cd5a4742/variables.json:ro
+    stdin_open: true
+    tty: true
+    depends_on:
+      - backend
+
+volumes:
+  redis-dev-data:
