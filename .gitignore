@@ -1,7 +1,6 @@
 node_modules
 backend/data.json
 backend/.env
-dev/bds1/data
-dev/bds2/data
+dev/*/data
 dev/waterdog/*
 !dev/waterdog/config.yml

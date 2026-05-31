@@ -91,6 +91,26 @@ These are inherent to BDS, not the stack:
    activation should apply on a fresh `dev/bds{1,2}/data`. If you started once
    before adding it, delete `dev/bds{1,2}/data` and bring the stack back up.
 
+## Adding more servers (3, 4, 5 …)
+
+The stack is N-server by design — every BDS just needs a unique `serverId` and
+points at the same backend. Use the generator instead of copy-pasting blocks:
+
+```bash
+node dev/add-server.js minigames            # internal-only (behind proxy)
+node dev/add-server.js skyblock --port 19134 # also exposed directly for debug
+# or: npm run add-server -- minigames
+```
+
+It creates `dev/<serverId>/permissions.json` + `variables.json` and prints:
+
+1. a `docker-compose.dev.yml` service block to paste under `services:` (then
+   add the service name to the `waterdog` service's `depends_on`), and
+2. a `dev/waterdog/config.yml` entry to paste under `servers:`.
+
+Options: `--endpoint <url>` (default `http://backend:3000`) and
+`--api-key <key>` (default `super-secret`).
+
 ### WaterdogPE notes
 
 - **Downstream BDS must be offline-mode** (`ONLINE_MODE: "false"`, already
