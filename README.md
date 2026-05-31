@@ -1,23 +1,174 @@
-# Bedrock Database 3.0
+# Bedrock Database
 
-A Minecraft Bedrock asynchronous database with unlimited storage. This database works on Dynamic Properties.
-The database is designed for optimal performance and has a built in queue system for async calls.
+A Minecraft Bedrock data layer for Script API add-ons — from a single-world
+key/value store all the way up to **syncing player data across multiple
+Bedrock Dedicated Servers**.
 
-## Getting started:
+It comes in two layers you can mix and match:
 
-First you will need to make a table, you can do this by either adding a key to the `TABLES` object in [tables.ts](src/tables.ts) or
-creating a variable assigned to a `Database` instance. A Cool thing about this database is that it supports full type safety and
-you can predefine the types of the keys and values of the database.
+| Layer | Class | Stores data in | Use it for |
+| ----- | ----- | -------------- | ---------- |
+| **Local** | `Database` | World **Dynamic Properties** | Single world. Fast, offline, unlimited storage via chunking. |
+| **Networked** | `RemoteDatabase` | A central **HTTP backend** | Sharing data across servers (economies, ranks, stats). |
+| **Player sync** | `SessionManager` | `RemoteDatabase` + locks | The "lobby + survival" network model: data follows the player. |
+
+---
+
+## Which one do I need?
+
+```
+Do you have more than one server that must share data?
+│
+├─ No  ──▶ use `Database`        (src/Database.ts)   — nothing else needed
+│
+└─ Yes ──▶ run the backend, then:
+            ├─ syncing arbitrary keys?   use `RemoteDatabase`  (src/RemoteDatabase.ts)
+            └─ syncing per-player data?  use `SessionManager`  (src/SessionManager.ts)
+```
+
+> The networked layers require `@minecraft/server-net`, which only exists on
+> **Bedrock Dedicated Server (BDS)** — not Realms or normal clients.
+
+---
+
+## Cross-server architecture
+
+```
+        client ──▶ ┌────────────┐  (optional WaterdogPE proxy)
+                   └─────┬──────┘
+              ┌──────────┴──────────┐
+        ┌─────▼────┐           ┌─────▼────┐
+        │  BDS A   │           │  BDS B   │   each runs the behavior pack
+        │survival-1│           │survival-2│   with a unique serverId
+        └─────┬────┘           └─────┬────┘
+              │   @minecraft/server-net (HTTP)   │
+              └──────────┬──────────┬────────────┘
+                     ┌───▼───┐  ┌───▼───┐
+                     │backend│─▶│ Redis │   single source of truth
+                     └───────┘  └───────┘
+```
+
+**Session-handoff pattern** (recommended, used by `SessionManager`):
+
+```
+On join  ──▶ acquire lock(player) ──▶ load their data into memory
+During play ─▶ read/write in memory (instant) + lock heartbeat
+On leave ──▶ save data ──▶ release lock(player)
+```
+
+A player only holds their lock on one server at a time, so there are no
+lost-update races. Locks have a TTL, so a crashed server's locks free
+themselves automatically.
+
+---
+
+## Quick start
+
+### 1. Local database (single world)
 
 ```ts
-import { Database } from "./Database.ts";
+import { Database } from "./Database";
+
+const coins = new Database<number>("coins");
+await coins.set("player-id", 100);
+const value = coins.get("player-id"); // 100
+```
+
+Full API in [Local Database API](#local-database-api) below.
+
+### 2. Cross-server player sync
+
+Run the backend (see [`backend/README.md`](backend/README.md)):
+
+```bash
+npm run backend          # JSON file backend (quick start)
+npm run backend:redis    # Redis backend (production, 100-200 players)
+```
+
+Then in your pack, give **each server a unique `serverId`**:
+
+```ts
+import { SessionManager } from "./SessionManager";
+
+const profiles = new SessionManager<{ coins: number; rank: string }>({
+  endpoint: "http://10.0.0.5:3000",
+  apiKey: "super-secret",
+  serverId: "survival-1",            // different on every server
+  defaultData: () => ({ coins: 0, rank: "Newbie" }),
+  onLoad: (player, data) => player.sendMessage(`Coins: ${data.coins}`),
+});
+
+// Instant in-memory during play; saved on leave + flushed on demand:
+profiles.update(player, (p) => ({ ...p, coins: p.coins + 1 }));
+await profiles.save(player); // for changes you can't afford to lose
+```
+
+See [`src/sessionExample.ts`](src/sessionExample.ts) for a fuller example.
+
+---
+
+## Project layout
+
+```
+src/
+├── Database.ts          Local key/value store on Dynamic Properties
+├── RemoteDatabase.ts    HTTP-backed store (retry + offline write buffer)
+├── SessionManager.ts    Lock + load/save player data across servers
+├── sessionExample.ts    Economy/rank usage example
+└── index.dev.ts         Demo entry for the two-server dev stack
+
+backend/
+├── server.js            JSON-file backend (zero dependencies)
+├── server.redis.js      Redis backend (production-scale)
+├── docker-compose.yml   Production stack (Redis + backend)
+├── README.md            Backend API, scaling notes
+└── DEPLOYMENT.md        BDS server-net allow-list, Docker, HTTPS
+
+dev/                     Local two-server test stack (+ WaterdogPE proxy)
+docker-compose.dev.yml   Proxy + 2× BDS + backend + Redis
+```
+
+## Documentation
+
+- **[backend/README.md](backend/README.md)** — backend API, the two backends,
+  and scaling to 100-200 players.
+- **[backend/DEPLOYMENT.md](backend/DEPLOYMENT.md)** — enabling
+  `@minecraft/server-net` on BDS, Docker Compose, secrets, and HTTPS.
+- **[dev/README.md](dev/README.md)** — run two BDS locally behind a WaterdogPE
+  proxy to test sync end-to-end.
+
+## Building
+
+```bash
+npm install
+npm run build            # production build  -> scripts/index.js
+npm run dev              # watch build
+npm run build:server     # build the two-server demo entry (src/index.dev.ts)
+```
+
+---
+
+# Local Database API
+
+The original single-world database. It stores data in world Dynamic
+Properties, chunked so there's effectively no size limit, with a built-in
+queue so calls made before the world finishes loading are handled safely.
+
+## Getting started
+
+Create a table by adding a key to the `TABLES` object in
+[tables.ts](src/tables.ts), or just construct a `Database` directly. It's
+fully type-safe — you can predefine the key/value types.
+
+```ts
+import { Database } from "./Database";
 
 const table = new Database<any>("test");
 ```
 
-## Setting Data:
+## Setting data
 
-Setting data is very simple and will send back a promise that can be awaited to let you know when the data is successfully saved in the entities.
+Returns a promise that resolves once the data is saved.
 
 ```ts
 table.set("someRandomKey", "someRandomValue");
@@ -30,10 +181,10 @@ async function saveSomeData() {
 }
 ```
 
-## Grabbing Data:
+## Grabbing data
 
-This database supports Asynchronous calls that can be used for grabbing data at any time (which includes on world load), or you simply
-can grab data from memory.
+Asynchronous calls work any time (including on world load); synchronous calls
+read straight from memory.
 
 ```ts
 table.getSync("someRandomKey").then((v) => {
@@ -41,83 +192,66 @@ table.getSync("someRandomKey").then((v) => {
 });
 ```
 
-Or you can simply call from memory using:
+Or, from memory:
 
-> **Warning**: This can throw errors if data is tried to grab before world load.
+> **Warning**: This can throw if data is read before world load.
 
 ```ts
 const value = table.get("someRandomKey");
 ```
 
-## Other Supported Methods:
+## Other methods
 
-### Keys:
+Each read has a synchronous form (reads memory, throws before load) and an
+async `...Sync` form (safe on world load).
 
-Returns a iterable list of keys that are stored in this table.
+### Keys
 
-> **Warning**: This can throw errors if data is tried to grab before world load.
+Returns the list of keys in this table.
 
 ```ts
-table.keys(): any[]
+table.keys(): string[]
+table.keysSync(): Promise<string[]>
 ```
 
+### Values
+
+Returns the list of all values in this table.
+
 ```ts
-table.keysSync(): Promise<any[]>
+table.values(): T[]
+table.valuesSync(): Promise<T[]>
 ```
 
-### Values:
+### Has
 
-Returns a iterable list of all values that are stored in this table.
-
-> **Warning**: This can throw errors if data is tried to grab before world load.
+Checks whether a key exists.
 
 ```ts
-table.values(): any[]
+table.has(key): boolean
+table.hasSync(key): Promise<boolean>
 ```
 
+### Collection
+
+Returns an object of all keys and values.
+
 ```ts
-table.valuesSync(): Promise<any[]>
+table.collection(): { [key: string]: T }
+table.collectionSync(): Promise<{ [key: string]: T }>
 ```
 
-### Has:
+### Delete
 
-Checks if a key exists on this table and returns boolean.
-
-> **Warning**: This can throw errors if data is tried to grab before world load.
+Deletes a key; resolves to whether it was removed.
 
 ```ts
-table.has(key: any): boolean
-```
-
-```ts
-table.hasSync(key: any): Promise<boolean>
-```
-
-### Collection:
-
-Returns a Object of all keys and values on this table.
-
-> **Warning**: This can throw errors if data is tried to grab before world load.
-
-```ts
-table.collection(): { [any]: any }
-```
-
-```ts
-table.collection(): Promise<{ [any]: any }>
-```
-
-### Delete:
-
-Deletes a key on this table and returns a boolean if it successfully deleted the key.
-
-```ts
-table.delete(key: any): Promise<boolean>
+table.delete(key): Promise<boolean>
 ```
 
 ### Clear
 
-Clears the entire table and sets it back to a empty object, then returns once finished.
+Clears the entire table back to an empty object.
 
 ```ts
 table.clear(): Promise<void>
