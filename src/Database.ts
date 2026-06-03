@@ -1,42 +1,74 @@
 import { world } from "@minecraft/server";
 
-export class Database<T extends any> {
+/**
+ * Tracks whether the world has finished loading.
+ *
+ * In `@minecraft/server` 2.x, scripts run in an "early execution" phase
+ * before the world is available. Reading or writing dynamic properties
+ * during that phase throws, so every {@link Database} must defer its
+ * initial load until the `worldLoad` event has fired.
+ */
+let WORLD_HAS_LOADED = false;
+world.afterEvents.worldLoad.subscribe(() => {
+  WORLD_HAS_LOADED = true;
+});
+
+export class Database<T = any> {
   /**
-   * Data saved in memory
+   * Data saved in memory. `null` until the table has loaded from storage.
    */
   private MEMORY: { [key: string]: T } | null;
 
   /**
-   * List of queued tasks on this table
+   * Queue of tasks waiting for this table to finish loading.
    */
   private QUEUE: Array<() => void>;
 
   /**
-   * Callbacks to run once the database data has been fetched
+   * Callback to run once the database data has been fetched.
    */
-  private onLoadCallback: (data: { [key: string]: T } | null) => void;
+  private onLoadCallback?: (data: { [key: string]: T }) => void;
 
   /**
-   * Creates a new instance of the Database
+   * Creates a new instance of the Database.
+   *
+   * Loading is deferred until the world is ready so it is safe to construct
+   * tables at the top level of a script (during early execution).
    * @param tableName - The name of the table
    */
-  constructor(public tableName: string) {
-    this.tableName = tableName;
+  constructor(public readonly tableName: string) {
     this.MEMORY = null;
     this.QUEUE = [];
 
-    const LOADED_DATA = this.fetch();
-    this.MEMORY = LOADED_DATA;
+    if (WORLD_HAS_LOADED) {
+      // Constructed at runtime, after the world is already available.
+      this.load();
+    } else {
+      // Constructed during early execution; wait for the world to load.
+      world.afterEvents.worldLoad.subscribe(() => this.load());
+    }
+  }
 
-    this.onLoadCallback?.(LOADED_DATA);
-    this.QUEUE.forEach((v) => v());
+  /**
+   * Loads data from storage into memory, runs the onLoad callback, and
+   * flushes any tasks that were queued while waiting for the world to load.
+   */
+  private load(): void {
+    if (this.MEMORY) return;
+    this.MEMORY = this.fetch();
+
+    this.onLoadCallback?.(this.MEMORY);
+
+    const queue = this.QUEUE;
+    this.QUEUE = [];
+    for (const resolve of queue) resolve();
   }
 
   /**
    * Resets this databases key length
    * and resets all corresponding ids.
    */
-  private resetStorage() {
+  private resetStorage(): void {
     const ids = world
       .getDynamicPropertyIds()
       .filter((i) => i.startsWith(`db_${this.tableName}`));
@@ -48,8 +80,7 @@ export class Database<T extends any> {
 
   /**
    * Fetches this data from the dynamic properties
-   * associated with this database
-   * @returns
+   * associated with this database.
    */
   private fetch(): { [key: string]: T } {
     let idLength = world.getDynamicProperty(`db_${this.tableName}`) ?? 0;
@@ -74,39 +105,61 @@ export class Database<T extends any> {
       }
       collectedData += data;
     }
-    return JSON.parse(collectedData);
+
+    try {
+      return JSON.parse(collectedData);
+    } catch (error) {
+      console.warn(
+        `[DATABASE]: DB: ${this.tableName}, contains corrupt JSON and could not be parsed! Resetting data. ${error}`
+      );
+      this.resetStorage();
+      return {};
+    }
   }
 
   /**
-   * Adds a queue task to be awaited
-   * @returns once its this items time to run in queue
+   * Adds a queue task to be awaited.
+   * @returns once it is this items time to run in queue (i.e. once loaded)
    */
-  private async addQueueTask(): Promise<void> {
+  private addQueueTask(): Promise<void> {
     return new Promise((resolve) => {
       this.QUEUE.push(resolve);
     });
   }
 
   /**
-   * Saves data into this database
-   * @returns once data is saved to the database entities
+   * Saves the in-memory data into this database's dynamic properties.
+   *
+   * Data is chunked because a single dynamic property string is byte
+   * limited. Any chunks left over from a previously larger dataset are
+   * removed so storage is not leaked after deletions.
    */
-  private async saveData(): Promise<void> {
-    if (!this.MEMORY) await this.addQueueTask();
-    const chunks = JSON.stringify(this.MEMORY).match(/.{1,8000}/g);
-    if (!chunks) return;
+  private saveData(): void {
+    if (!this.MEMORY) return;
+
+    // `[\s\S]` (not `.`) is used so line/paragraph separators that
+    // `JSON.stringify` emits literally (U+2028 / U+2029) are not dropped.
+    const chunks = JSON.stringify(this.MEMORY).match(/[\s\S]{1,8000}/g) ?? [];
+    const previousLength = world.getDynamicProperty(`db_${this.tableName}`);
+
     world.setDynamicProperty(`db_${this.tableName}`, chunks.length);
-    const entries = chunks.entries();
-    for (const [i, chunk] of entries) {
-      world.setDynamicProperty(`db_${this.tableName}_${i}`, chunk);
+    for (let i = 0; i < chunks.length; i++) {
+      world.setDynamicProperty(`db_${this.tableName}_${i}`, chunks[i]);
+    }
+
+    // Clean up orphaned chunks left over from a previously larger dataset.
+    if (typeof previousLength === "number") {
+      for (let i = chunks.length; i < previousLength; i++) {
+        world.setDynamicProperty(`db_${this.tableName}_${i}`, undefined);
+      }
     }
   }
 
   /**
-   * Sends a callback once this database has initiated data
+   * Sends a callback once this database has loaded its data.
    * @param callback
    */
-  async onLoad(callback: (data: { [key: string]: T } | null) => void) {
+  onLoad(callback: (data: { [key: string]: T }) => void): void {
     if (this.MEMORY) return callback(this.MEMORY);
     this.onLoadCallback = callback;
   }
@@ -118,37 +171,37 @@ export class Database<T extends any> {
    * @returns A promise that resolves once the value has been saved in the database table.
    */
   async set(key: string, value: T): Promise<void> {
-    if (!this.MEMORY) throw new Error("Data tried to be set before load!");
-    this.MEMORY[key] = value;
-    return this.saveData();
+    if (!this.MEMORY) await this.addQueueTask();
+    this.MEMORY![key] = value;
+    this.saveData();
   }
 
   /**
-   * Gets a value from this table
-   * @param {Key} key - The key to retrieve the value for.
-   * @returns the value associated with the given key in the database table.
+   * Gets a value from this table synchronously.
+   *
+   * @param key - The key to retrieve the value for.
+   * @returns the value associated with the given key, or `undefined` if absent.
    */
-  get(key: string): T | null {
+  get(key: string): T | undefined {
     if (!this.MEMORY)
-      throw new Error("Data not loaded! Consider using `getAsync` instead!");
+      throw new Error("Data not loaded! Consider using `getSync` instead!");
     return this.MEMORY[key];
   }
 
   /**
-   * Gets a value asynchronously from the database table.
-   * @param {Key} key - The key to retrieve the value for.
-   * @returns {Promise<T>} A Promise that resolves to the value associated with the given key in the database table.
+   * Gets a value asynchronously, awaiting the table load if necessary.
+   * This should be used when data may be requested before the world has loaded.
+   * @param key - The key to retrieve the value for.
+   * @returns A Promise that resolves to the value associated with the given key.
    */
-  async getSync(key: string): Promise<T | null> {
-    if (this.MEMORY) return this.get(key);
-    await this.addQueueTask();
-    if (!this.MEMORY) return null;
-    return this.MEMORY[key];
+  async getSync(key: string): Promise<T | undefined> {
+    if (!this.MEMORY) await this.addQueueTask();
+    return this.MEMORY![key];
   }
 
   /**
    * Get all the keys in the table
-   * @returns {string[]} the keys on this table
+   * @returns the keys on this table
    */
   keys(): string[] {
     if (!this.MEMORY)
@@ -158,18 +211,16 @@ export class Database<T extends any> {
 
   /**
    * Get all the keys in the table async, this should be used on world load
-   * @returns {Promise<string[]>} the keys on this table
+   * @returns the keys on this table
    */
   async keysSync(): Promise<string[]> {
-    if (this.MEMORY) return this.keys();
-    await this.addQueueTask();
-    if (!this.MEMORY) return [];
-    return Object.keys(this.MEMORY);
+    if (!this.MEMORY) await this.addQueueTask();
+    return Object.keys(this.MEMORY!);
   }
 
   /**
    * Get all the values in the table
-   * @returns {T[]} values in this table
+   * @returns values in this table
    */
   values(): T[] {
     if (!this.MEMORY)
@@ -179,40 +230,39 @@ export class Database<T extends any> {
 
   /**
    * Get all the values in the table async, this should be used on world load
-   * @returns {Promise<T[]>} the values on this table
+   * @returns the values on this table
    */
   async valuesSync(): Promise<T[]> {
-    if (this.MEMORY) return this.values();
-    await this.addQueueTask();
-    if (!this.MEMORY) return [];
-    return Object.values(this.MEMORY);
+    if (!this.MEMORY) await this.addQueueTask();
+    return Object.values(this.MEMORY!);
   }
 
   /**
-   * Check if the key exists in the table
-   * @param {string} key the key to test
-   * @returns {boolean} if this key exists on this table
+   * Check if the key exists in the table.
+   * @param key the key to test
+   * @returns whether this key exists on this table
    */
   has(key: string): boolean {
     if (!this.MEMORY)
       throw new Error("Data not loaded! Consider using `hasSync` instead!");
-    return Boolean(this.MEMORY[key]);
+    return Object.prototype.hasOwnProperty.call(this.MEMORY, key);
   }
 
   /**
-   * Check if the key exists in the table async
-   * @param {string} key the key to test
-   * @returns {Promise<boolean>} if this table contains this key.
+   * Check if the key exists in the table async.
+   * @param key the key to test
+   * @returns whether this table contains this key.
    */
   async hasSync(key: string): Promise<boolean> {
-    if (this.MEMORY) return this.has(key);
-    await this.addQueueTask();
-    if (!this.MEMORY) return false;
-    return Boolean(this.MEMORY[key]);
+    if (!this.MEMORY) await this.addQueueTask();
+    return Object.prototype.hasOwnProperty.call(this.MEMORY!, key);
   }
 
   /**
-   * Gets all the keys and values
+   * Gets a shallow copy of all the keys and values.
+   *
+   * A copy is returned so callers cannot mutate the internal state without
+   * going through {@link set} (which would otherwise never be persisted).
    * @returns The collection data.
    */
   collection(): { [key: string]: T } {
@@ -220,47 +270,48 @@ export class Database<T extends any> {
       throw new Error(
         "Data not loaded! Consider using `collectionSync` instead!"
       );
-    return this.MEMORY;
+    return { ...this.MEMORY };
   }
 
   /**
-   * Gets all the keys and values async, this should be used for grabbingCollection on world load
-   * @returns {Promise<{ [key: string]: T }>} The collection data.
+   * Gets a shallow copy of all the keys and values async, this should be used on world load.
+   * @returns The collection data.
    */
   async collectionSync(): Promise<{ [key: string]: T }> {
-    if (this.MEMORY) return this.collection();
-    await this.addQueueTask();
-    if (!this.MEMORY) return {};
-    return this.MEMORY;
+    if (!this.MEMORY) await this.addQueueTask();
+    return { ...this.MEMORY! };
   }
 
   /**
-   * Delete a key from this table
+   * Delete a key from this table.
    * @param key the key to delete
-   * @returns if the deletion was successful
+   * @returns whether the key existed and was deleted
    */
   async delete(key: string): Promise<boolean> {
-    if (!this.MEMORY) return false;
-    const status = delete this.MEMORY[key];
-    await this.saveData();
-    return status;
+    if (!this.MEMORY) await this.addQueueTask();
+    if (!Object.prototype.hasOwnProperty.call(this.MEMORY, key)) return false;
+    delete this.MEMORY![key];
+    this.saveData();
+    return true;
   }
 
   /**
-   * Clear everything in the table
+   * Clear everything in the table.
    * @returns once this table has been cleared
    */
   async clear(): Promise<void> {
+    if (!this.MEMORY) await this.addQueueTask();
     this.MEMORY = {};
-    return await this.saveData();
+    this.saveData();
   }
 
   /**
-   * Gets a key by value
+   * Gets the first key associated with the given value.
    * @param value
-   * @returns
+   * @returns the key, or `null` if the value is not found
    */
   getKeyByValue(value: T): string | null {
+    if (!this.MEMORY) return null;
     for (const key in this.MEMORY) {
       if (this.MEMORY[key] === value) {
         return key;

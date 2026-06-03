@@ -5,7 +5,7 @@
   "main": "scripts/index.js",
   "repository": {
     "type": "git",
-    "url": "git+hhttps://github.com/smell-of-curry/bedrock-database.git"
+    "url": "git+https://github.com/smell-of-curry/bedrock-database.git"
   },
   "keywords": [
     "mcbe",
@@ -14,7 +14,7 @@
     "script-api"
   ],
   "author": "Smell of curry",
-  "license": "ISC",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/smell-of-curry/bedrock-database/issues"
   },
@@ -24,7 +24,7 @@
     "dev": "node build.js dev"
   },
   "devDependencies": {
-    "@minecraft/server": "^1.7.0-beta.1.20.40-stable",
+    "@minecraft/server": "^2.7.0",
     "@types/fs-extra": "^9.0.13",
     "esbuild": "^0.15.18",
     "fs-extra": "^10.1.0"

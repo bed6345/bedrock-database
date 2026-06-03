@@ -1,7 +1,11 @@
 # Bedrock Database 3.0
 
-A Minecraft Bedrock asynchronous database with unlimited storage. This database works on Dynamic Properties.
+A Minecraft Bedrock asynchronous database with large-scale storage. This database works on Dynamic Properties.
 The database is designed for optimal performance and has a built in queue system for async calls.
+
+> **Compatibility**: Built for `@minecraft/server` `2.7.0` (Minecraft Bedrock `1.26.20`+).
+> Tables load lazily on the `worldLoad` event, so they are safe to create at the top level
+> of a script during early execution.
 
 ## Getting started:
 
@@ -104,7 +108,7 @@ table.collection(): { [any]: any }
 ```
 
 ```ts
-table.collection(): Promise<{ [any]: any }>
+table.collectionSync(): Promise<{ [any]: any }>
 ```
 
 ### Delete:
