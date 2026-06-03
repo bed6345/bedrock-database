@@ -53,6 +53,45 @@ Or you can simply call from memory using:
 const value = table.get("someRandomKey");
 ```
 
+## Storing values larger than 32 KB:
+
+A single dynamic property string is limited to **32767 bytes**. Writing more
+throws:
+
+```
+ArgumentOutOfBoundsError: Unsupported or out of bounds value passed to function
+argument [0]: String length for dynamic property 'allPlayers', Value: 32838,
+Argument max: 32767
+```
+
+This database avoids that limit by automatically splitting every table across
+as many dynamic properties as needed, so you never have to think about it:
+
+```ts
+import { Database } from "./Database";
+
+// Recommended: one key per player. The table is chunked transparently.
+const players = new Database<PlayerData>("players");
+await players.set(player.id, data);
+```
+
+If you just need a chunked drop-in replacement for a single oversized
+`world.setDynamicProperty(...)` call, use the helpers:
+
+```ts
+import { setLargeProperty, getLargeProperty } from "./DynamicProperty";
+
+// Before (throws when the JSON exceeds 32767 bytes):
+// world.setDynamicProperty("allPlayers", JSON.stringify(allPlayers));
+
+// After (safe for any size):
+setLargeProperty("allPlayers", allPlayers);
+const allPlayers = getLargeProperty<PlayerData[]>("allPlayers");
+```
+
+Chunking is measured in UTF-8 bytes, so multi-byte content (emoji, CJK, etc.)
+is handled correctly and never split mid-character.
+
 ## Other Supported Methods:
 
 ### Keys:

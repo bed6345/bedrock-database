@@ -1,4 +1,5 @@
 import { world } from "@minecraft/server";
+import { chunkString } from "./DynamicProperty";
 
 /**
  * Tracks whether the world has finished loading.
@@ -137,9 +138,10 @@ export class Database<T = any> {
   private saveData(): void {
     if (!this.MEMORY) return;
 
-    // `[\s\S]` (not `.`) is used so line/paragraph separators that
-    // `JSON.stringify` emits literally (U+2028 / U+2029) are not dropped.
-    const chunks = JSON.stringify(this.MEMORY).match(/[\s\S]{1,8000}/g) ?? [];
+    // Chunk by UTF-8 byte budget so no single property exceeds the engine's
+    // 32767-byte limit, regardless of the content (including multi-byte
+    // characters and U+2028 / U+2029 separators).
+    const chunks = chunkString(JSON.stringify(this.MEMORY));
     const previousLength = world.getDynamicProperty(`db_${this.tableName}`);
 
     world.setDynamicProperty(`db_${this.tableName}`, chunks.length);
